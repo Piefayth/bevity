@@ -21,9 +21,9 @@ use unity as your bevy editor
 
 8. now you can search for components and click them to add them
 
-9. right click a selection of game objects and choose UnityGLTF -> Export as GLB/GLTF
+9. right click a selection of game objects and choose UnityGLTF -> Export as GLB/GLTF. any objects with bevity components will get their component data exported to the gltf.
 
-10. Now with `serde_json` and a simple observer, you can reflect the component data out from the `GLTFExtras`
+10. now with `serde_json` and a simple observer, you can reflect the component data out from the `GLTFExtras`
 
 ```rs
 fn apply_bevity_components(
