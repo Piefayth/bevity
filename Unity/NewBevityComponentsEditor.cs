@@ -7,14 +7,14 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// Inspector for <see cref="NewBevityComponents"/> that renders every component/value directly from the schema
+/// Inspector for <see cref="BevityComponents"/> that renders every component/value directly from the schema
 /// produced by the Bevy remote protocol. It works with the flat <c>object</c> graph stored by
-/// <see cref="NewBevityComponents"/>.
+/// <see cref="BevityComponents"/>.
 /// </summary>
-[CustomEditor(typeof(NewBevityComponents))]
+[CustomEditor(typeof(BevityComponents))]
 public class NewBevityComponentsEditor : Editor
 {
-    private NewBevityComponents _target;
+    private BevityComponents _target;
     private Vector2 _scroll;
     private string _searchText = "";
     private readonly Dictionary<string, bool> _foldouts = new();
@@ -34,11 +34,35 @@ public class NewBevityComponentsEditor : Editor
     // Style for type labels
     private GUIStyle _typeStyle;
 
-    /*—————————— Unity entry points ——————————*/
+    /*â€”â€”â€”â€”â€”â€”â€”â€”â€”â€” Unity entry points â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”*/
 
     private void OnEnable() {
-        _target = (NewBevityComponents)target;
-        RefreshAvailableTypes();
+        _target = (BevityComponents)target;
+
+        // Force schema loading check
+        var schemaDictionary = GetSchemaDictionary();
+        bool hasSchemas = schemaDictionary != null && schemaDictionary.Count > 0;
+        bool hasComponentTypes = _target.ComponentTypes.Any();
+
+        // Access the serialized JSON field to check if there's data that needs deserializing
+        var jsonProp = serializedObject.FindProperty("_json");
+        string jsonValue = jsonProp?.stringValue ?? "{}";
+        bool hasSerializedJson = !string.IsNullOrEmpty(jsonValue) && jsonValue != "{}";
+
+
+        // If we have serialized JSON but no loaded component types, we need to load schemas and deserialize
+        if ((hasSerializedJson && !hasComponentTypes) || !hasSchemas) {
+            _target.LoadSchemasFromRegistry();
+            // Force a repaint after loading
+            EditorApplication.delayCall += () => {
+                if (this != null) {
+                    RefreshAvailableTypes();
+                    Repaint();
+                }
+            };
+        } else {
+            RefreshAvailableTypes();
+        }
 
         // Initialize type style  
         try {
@@ -46,13 +70,20 @@ public class NewBevityComponentsEditor : Editor
                 fontStyle = FontStyle.Italic,
                 fontSize = 9,
                 normal = {
-                textColor = new Color(0.5f, 0.5f, 0.5f)
-            }
+            textColor = new Color(0.5f, 0.5f, 0.5f)
+        }
             };
         } catch (Exception) {
             // this happens sometimes dont worry about it
         }
+    }
+    private bool ShouldAutoLoadSchemas() {
+        if (_target == null) return false;
 
+        // Check if schemas are loaded by examining the static schema dictionary
+        var schemaDictionary = GetSchemaDictionary();
+        Debug.Log(schemaDictionary.Count);
+        return schemaDictionary == null || schemaDictionary.Count == 0;
     }
 
     public override void OnInspectorGUI() {
@@ -106,7 +137,7 @@ public class NewBevityComponentsEditor : Editor
         if (GUI.changed) EditorUtility.SetDirty(_target);
     }
 
-    /*—————————— Component Drawing ——————————*/
+    /*â€”â€”â€”â€”â€”â€”â€”â€”â€”â€” Component Drawing â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”*/
 
     private void DrawComponent(string typePath) {
         var schema = GetSchema(typePath);
@@ -208,7 +239,7 @@ public class NewBevityComponentsEditor : Editor
                 return value;
             }
 
-            var box = value as NewBevityComponents.EnumBox ?? new NewBevityComponents.EnumBox();
+            var box = value as BevityComponents.EnumBox ?? new BevityComponents.EnumBox();
             int currentIndex = string.IsNullOrEmpty(box.Variant) ? 0 : variants.IndexOf(box.Variant);
             if (currentIndex < 0) currentIndex = 0;
 
@@ -230,7 +261,7 @@ public class NewBevityComponentsEditor : Editor
                     string fieldName = p.Name;
                     dict.TryGetValue(fieldName, out var fieldValue);
 
-                    var fieldSchema = ResolveRef(p.Value["type"], schema);
+                    var fieldSchema = ResolveRef(p.Value["type"]);
                     if (fieldSchema != null) {
                         var newValue = DrawValue(fieldValue, fieldSchema, fieldName, false);
                         dict[fieldName] = newValue;
@@ -249,7 +280,7 @@ public class NewBevityComponentsEditor : Editor
 
                 // Special case for single-field tuple struct with glam type
                 if (items.Count == 1) {
-                    var fieldSchema = ResolveRef(items[0]["type"], schema);
+                    var fieldSchema = ResolveRef(items[0]["type"]);
                     if (fieldSchema != null) {
                         var fieldTypePath = fieldSchema["typePath"]?.ToString();
 
@@ -268,7 +299,7 @@ public class NewBevityComponentsEditor : Editor
 
                 // Regular case - draw each field directly
                 for (int i = 0; i < items.Count; i++) {
-                    var fieldSchema = ResolveRef(items[i]["type"], schema);
+                    var fieldSchema = ResolveRef(items[i]["type"]);
                     if (fieldSchema != null) {
                         var newValue = DrawValue(list[i], fieldSchema, $"Field {i}", false);
                         if (!ReferenceEquals(list[i], newValue))
@@ -283,7 +314,7 @@ public class NewBevityComponentsEditor : Editor
             return DrawList(value as IList<object>, schema, "", false);
         } else if (kind == "Option") {
             // Draw option directly
-            return DrawOption(value as NewBevityComponents.EnumBox, schema, "", false);
+            return DrawOption(value as BevityComponents.EnumBox, schema, "", false);
         }
 
         // Default fallback
@@ -355,7 +386,7 @@ public class NewBevityComponentsEditor : Editor
         }
     }
 
-    /*—————————— Value Drawing ——————————*/
+    /*â€”â€”â€”â€”â€”â€”â€”â€”â€”â€” Value Drawing â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”*/
 
     private object DrawValue(object val, JObject schema, string label, bool parentJustExpanded = false) {
         if (schema == null) return val;
@@ -383,9 +414,9 @@ public class NewBevityComponentsEditor : Editor
             case "TupleStruct":
                 return DrawTupleStruct(val as IList<object>, schema, label, parentJustExpanded);
             case "Enum":
-                return DrawEnum(val as NewBevityComponents.EnumBox, schema, label, parentJustExpanded);
+                return DrawEnum(val as BevityComponents.EnumBox, schema, label, parentJustExpanded);
             case "Option":
-                return DrawOption(val as NewBevityComponents.EnumBox, schema, label, parentJustExpanded);
+                return DrawOption(val as BevityComponents.EnumBox, schema, label, parentJustExpanded);
             case "List":
             case "Array":
                 return DrawList(val as IList<object>, schema, label, parentJustExpanded);
@@ -395,7 +426,7 @@ public class NewBevityComponentsEditor : Editor
         }
     }
 
-    /*—————————— Primitive Types ——————————*/
+    /*â€”â€”â€”â€”â€”â€”â€”â€”â€”â€” Primitive Types â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”*/
 
     private object DrawPrimitive(object val, string typePath, string label, bool showType = false) {
         // Create a field with type label
@@ -458,7 +489,7 @@ public class NewBevityComponentsEditor : Editor
         return arr;
     }
 
-    /*—————————— Compound Types ——————————*/
+    /*â€”â€”â€”â€”â€”â€”â€”â€”â€”â€” Compound Types â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”*/
 
     private object DrawStruct(Dictionary<string, object> dict, JObject schema, string label, bool parentJustExpanded) {
         dict ??= new Dictionary<string, object>();
@@ -497,7 +528,7 @@ public class NewBevityComponentsEditor : Editor
                 string fieldName = p.Name;
                 dict.TryGetValue(fieldName, out var fieldValue);
 
-                var fieldSchema = ResolveRef(p.Value["type"], schema);
+                var fieldSchema = ResolveRef(p.Value["type"]);
                 if (fieldSchema != null) {
                     var newValue = DrawValue(fieldValue, fieldSchema, fieldName, thisJustExpanded);
                     // Always update the value and mark as changed
@@ -555,7 +586,7 @@ public class NewBevityComponentsEditor : Editor
 
             // Special case for single-field tuple struct with glam type
             if (items.Count == 1) {
-                var fieldSchema = ResolveRef(items[0]["type"], schema);
+                var fieldSchema = ResolveRef(items[0]["type"]);
                 if (fieldSchema != null) {
                     var fieldTypePath = fieldSchema["typePath"]?.ToString();
 
@@ -575,7 +606,7 @@ public class NewBevityComponentsEditor : Editor
 
             // Regular case - draw each field
             for (int i = 0; i < items.Count; i++) {
-                var fieldSchema = ResolveRef(items[i]["type"], schema);
+                var fieldSchema = ResolveRef(items[i]["type"]);
                 if (fieldSchema != null) {
                     var newValue = DrawValue(list[i], fieldSchema, $"Field {i}", thisJustExpanded);
                     if (!ReferenceEquals(list[i], newValue))
@@ -588,10 +619,10 @@ public class NewBevityComponentsEditor : Editor
         return list;
     }
 
-    private object DrawEnum(NewBevityComponents.EnumBox box, JObject schema, string label, bool parentJustExpanded) {
+    private object DrawEnum(BevityComponents.EnumBox box, JObject schema, string label, bool parentJustExpanded) {
         // Create a new EnumBox if null
         if (box == null) {
-            box = new NewBevityComponents.EnumBox();
+            box = new BevityComponents.EnumBox();
         }
 
         // Get all available variants
@@ -640,7 +671,7 @@ public class NewBevityComponentsEditor : Editor
             if (variantSchema["kind"]?.ToString() == "Tuple") {
                 EditorGUI.indentLevel++;
                 if (variantSchema["prefixItems"] is JArray prefixItems && prefixItems.Count > 0) {
-                    var itemSchema = ResolveRef(prefixItems[0]["type"], schema);
+                    var itemSchema = ResolveRef(prefixItems[0]["type"]);
                     if (itemSchema != null) {
                         var itemTypePath = itemSchema["typePath"]?.ToString();
 
@@ -670,10 +701,10 @@ public class NewBevityComponentsEditor : Editor
         return box;
     }
 
-    private object DrawOption(NewBevityComponents.EnumBox box, JObject schema, string label, bool parentJustExpanded) {
+    private object DrawOption(BevityComponents.EnumBox box, JObject schema, string label, bool parentJustExpanded) {
         // Create a new EnumBox if null
         if (box == null) {
-            box = new NewBevityComponents.EnumBox();
+            box = new BevityComponents.EnumBox();
         }
 
         // Determine current state
@@ -714,7 +745,7 @@ public class NewBevityComponentsEditor : Editor
             if (someVariant != null && someVariant["kind"]?.ToString() == "Tuple") {
                 EditorGUI.indentLevel++;
                 if (someVariant["prefixItems"] is JArray prefixItems && prefixItems.Count > 0) {
-                    var itemSchema = ResolveRef(prefixItems[0]["type"], schema);
+                    var itemSchema = ResolveRef(prefixItems[0]["type"]);
                     if (itemSchema != null) {
                         box.Data = DrawValue(box.Data, itemSchema, "Value", parentJustExpanded);
                     }
@@ -770,7 +801,7 @@ public class NewBevityComponentsEditor : Editor
                 while (list.Count > count)
                     list.RemoveAt(list.Count - 1);
             } else {
-                var itemSchema = ResolveRef(schema["items"]["type"], schema);
+                var itemSchema = ResolveRef(schema["items"]["type"]);
                 while (list.Count < count)
                     list.Add(CreateDefault(itemSchema));
             }
@@ -784,7 +815,7 @@ public class NewBevityComponentsEditor : Editor
         if (open && count > 0) {
             EditorGUI.indentLevel++;
 
-            var itemSchema = ResolveRef(schema["items"]["type"], schema);
+            var itemSchema = ResolveRef(schema["items"]["type"]);
             if (itemSchema != null) {
                 // Show item type once at the top of the list
                 var itemTypePath = itemSchema["typePath"]?.ToString();
@@ -809,7 +840,7 @@ public class NewBevityComponentsEditor : Editor
         return list;
     }
 
-    /*—————————— Helpers ——————————*/
+    /*â€”â€”â€”â€”â€”â€”â€”â€”â€”â€” Helpers â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”*/
 
     // Helper method to extract a simplified type name from a full path
     private string GetSimpleTypeName(string typePath) {
@@ -947,7 +978,7 @@ public class NewBevityComponentsEditor : Editor
         _filteredTypes = filteredList;
     }
 
-    private static Dictionary<string, JObject> GetSchemaDictionary() => typeof(NewBevityComponents)
+    private static Dictionary<string, JObject> GetSchemaDictionary() => typeof(BevityComponents)
         .GetField("_schemas", BindingFlags.Static | BindingFlags.NonPublic)
         ?.GetValue(null) as Dictionary<string, JObject>;
 
@@ -957,20 +988,20 @@ public class NewBevityComponentsEditor : Editor
     }
 
     private static bool IsGlam(string tp) {
-        var field = typeof(NewBevityComponents).GetField("_glamTypes", BindingFlags.Static | BindingFlags.NonPublic);
+        var field = typeof(BevityComponents).GetField("_glamTypes", BindingFlags.Static | BindingFlags.NonPublic);
         var glamTypes = field?.GetValue(null) as HashSet<string>;
         return glamTypes?.Contains(tp) ?? false;
     }
 
     private static string Simplify(string tp) => tp.Contains("::") ? tp[(tp.LastIndexOf("::", StringComparison.Ordinal) + 2)..] : tp;
 
-    private static JObject ResolveRef(JToken token, JObject root) {
-        var m = typeof(NewBevityComponents).GetMethod("ResolveRef", BindingFlags.Static | BindingFlags.NonPublic);
-        return (JObject)m.Invoke(null, new object[] { token, root });
+    private static JObject ResolveRef(JToken token) {
+        var m = typeof(BevityComponents).GetMethod("ResolveRef", BindingFlags.Static | BindingFlags.NonPublic);
+        return (JObject)m.Invoke(null, new object[] { token });
     }
 
     private static object CreateDefault(JObject schema) {
-        var m = typeof(NewBevityComponents).GetMethod("CreateDefault", BindingFlags.Static | BindingFlags.NonPublic);
+        var m = typeof(BevityComponents).GetMethod("CreateDefault", BindingFlags.Static | BindingFlags.NonPublic);
         return m.Invoke(null, new object[] { schema });
     }
 }
