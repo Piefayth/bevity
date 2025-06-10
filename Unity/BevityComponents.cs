@@ -56,8 +56,6 @@ public class BevityComponents : MonoBehaviour
                 _schemas[prop.Name] = (JObject)prop.Value;
             }
 
-            Debug.Log($"[NewBevityComponents] Loaded {_schemas.Count} component schemas");
-
             // After schemas are loaded, deserialize any pending components
             DeserializeComponents();
         } catch (Exception ex) {
@@ -178,8 +176,6 @@ public class BevityComponents : MonoBehaviour
                     Debug.LogWarning($"Schema for {typePath} not available, component will be loaded when schema is available");
                 }
             }
-
-            Debug.Log($"Deserialized {_components.Count} components from saved data");
         } catch (Exception ex) {
             Debug.LogError($"Error deserializing components: {ex.Message}\n{ex.StackTrace}");
         }
