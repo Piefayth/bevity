@@ -4,7 +4,7 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
-public class NewBevityComponents : MonoBehaviour
+public class BevityComponents : MonoBehaviour
 {
     // SERIALIZED DATA THAT MUST SURVIVE DOMAIN RELOADS
     [SerializeField] private string _json = "{}"; // Store the JSON representation of all components
@@ -235,7 +235,12 @@ public class NewBevityComponents : MonoBehaviour
         switch (kind) {
             case "Struct":
                 var jo = new JObject();
-                var props = (JObject)schema["properties"];
+
+                // Handle unit structs (no properties)
+                if (schema["properties"] is not JObject props) {
+                    return JValue.CreateNull();
+                }
+
                 var dict = value as Dictionary<string, object> ?? new Dictionary<string, object>();
 
                 foreach (var p in props.Properties()) {
@@ -452,7 +457,12 @@ public class NewBevityComponents : MonoBehaviour
             case "Struct":
                 var dict = new Dictionary<string, object>();
 
-                if (token is JObject tokenObj && schema["properties"] is JObject props) {
+                // Handle unit structs - they can be serialized as null or empty objects
+                if (schema["properties"] is not JObject props) {
+                    return dict; // Return empty dict for unit struct regardless of input
+                }
+
+                if (token is JObject tokenObj) {
                     foreach (var p in props.Properties()) {
                         if (tokenObj.TryGetValue(p.Name, out var childToken)) {
                             var propSchema = ResolveRef(p.Value["type"]);
@@ -714,6 +724,7 @@ public class NewBevityComponents : MonoBehaviour
                         var propSchema = ResolveRef(p.Value["type"]);
                         if (propSchema != null) {
                             dict[p.Name] = CreateDefault(propSchema);
+
                         }
                     }
                 }
