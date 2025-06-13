@@ -232,9 +232,9 @@ public class BevityComponents : MonoBehaviour
             case "Struct":
                 var jo = new JObject();
 
-                // Handle unit structs (no properties)
+                // Handle unit structs (no properties) - return empty object instead of null
                 if (schema["properties"] is not JObject props) {
-                    return JValue.CreateNull();
+                    return jo; // Return empty JObject instead of JValue.CreateNull()
                 }
 
                 var dict = value as Dictionary<string, object> ?? new Dictionary<string, object>();
