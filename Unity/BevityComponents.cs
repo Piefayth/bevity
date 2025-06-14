@@ -38,7 +38,7 @@ public class BevityComponents : MonoBehaviour
         }
 
         if (string.IsNullOrEmpty(_registry.jsonResponse)) {
-            Debug.LogError("BevityRegistry has no JSON response!");
+            Debug.LogError("BevityRegistry has no JSON response! :)");
             return;
         }
 
@@ -58,6 +58,25 @@ public class BevityComponents : MonoBehaviour
 
             // After schemas are loaded, deserialize any pending components
             DeserializeComponents();
+
+            if (_registry != null && _registry.ShouldAutoAddUuidComponent()) {
+                string uuidType = _registry.GetUuidComponentType();
+                if (!string.IsNullOrEmpty(uuidType)) {
+                    if (!_components.ContainsKey(uuidType)) {
+                        AddComponent(uuidType);
+                    } else {
+                        // Check if existing UUID component needs a value
+                        var existing = _components[uuidType];
+                        if (IsEmptyUuid(existing)) {
+                            if (_schemas.TryGetValue(uuidType, out var schema)) {
+                                SetUuidValue(existing, schema, _registry.GenerateNewUuid());
+                                SaveComponents();
+                            }
+                        }
+                    }
+                }
+            }
+
         } catch (Exception ex) {
             Debug.LogError($"Error loading schemas: {ex.Message}");
         }
@@ -72,6 +91,12 @@ public class BevityComponents : MonoBehaviour
         }
 
         _components[typePath] = CreateDefault(schema);
+
+        // If this is the UUID component, set it to a new UUID
+        if (_registry != null && typePath == _registry.GetUuidComponentType()) {
+            SetUuidValue(_components[typePath], schema, _registry.GenerateNewUuid());
+        }
+
         SaveComponents();
     }
 
@@ -89,6 +114,39 @@ public class BevityComponents : MonoBehaviour
             _components[typePath] = value;
             SaveComponents();
         }
+    }
+
+    private void SetUuidValue(object component, JObject schema, string uuid) {
+        var kind = schema["kind"]?.ToString();
+
+        if (kind == "TupleStruct" && component is IList<object> list && list.Count > 0) {
+            list[0] = uuid;
+        } else if (kind == "Struct" && component is Dictionary<string, object> dict) {
+            // Set the first string field
+            if (schema["properties"] is JObject props) {
+                foreach (var prop in props.Properties()) {
+                    var propSchema = ResolveRef(prop.Value["type"]);
+                    if (propSchema != null && IsStringType(propSchema["typePath"]?.ToString())) {
+                        dict[prop.Name] = uuid;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    private bool IsEmptyUuid(object component) {
+        if (component is IList<object> list && list.Count > 0) {
+            return string.IsNullOrEmpty(list[0]?.ToString());
+        }
+        if (component is Dictionary<string, object> dict) {
+            return dict.Values.Any(v => string.IsNullOrEmpty(v?.ToString()));
+        }
+        return string.IsNullOrEmpty(component?.ToString());
+    }
+
+    private bool IsStringType(string typePath) {
+        return typePath == "alloc::string::String" || typePath?.Contains("::Cow<str>") == true;
     }
 
     public JArray ToBevyJson() {
@@ -230,11 +288,17 @@ public class BevityComponents : MonoBehaviour
 
         switch (kind) {
             case "Struct":
+                // Check if this is a unit struct (no properties field) vs regular struct (empty properties)
+                if (!schema.ContainsKey("properties")) {
+                    // Unit struct - serialize as null for Rust's unit struct deserialization
+                    return JValue.CreateNull();
+                }
+
                 var jo = new JObject();
 
-                // Handle unit structs (no properties) - return empty object instead of null
+                // Handle regular structs (with empty or populated properties)
                 if (schema["properties"] is not JObject props) {
-                    return jo; // Return empty JObject instead of JValue.CreateNull()
+                    return jo; // Return empty JObject for regular struct with no fields
                 }
 
                 var dict = value as Dictionary<string, object> ?? new Dictionary<string, object>();
@@ -453,9 +517,15 @@ public class BevityComponents : MonoBehaviour
             case "Struct":
                 var dict = new Dictionary<string, object>();
 
-                // Handle unit structs - they can be serialized as null or empty objects
+                // Check if this is a unit struct (no properties field)
+                if (!schema.ContainsKey("properties")) {
+                    // Unit struct - return empty dict regardless of input (null, {}, etc.)
+                    return dict;
+                }
+
+                // Handle regular structs (with empty or populated properties)
                 if (schema["properties"] is not JObject props) {
-                    return dict; // Return empty dict for unit struct regardless of input
+                    return dict; // Return empty dict for regular struct with no fields
                 }
 
                 if (token is JObject tokenObj) {
@@ -715,12 +785,19 @@ public class BevityComponents : MonoBehaviour
         switch (kind) {
             case "Struct":
                 var dict = new Dictionary<string, object>();
+
+                // Check if this is a unit struct (no properties field)
+                if (!schema.ContainsKey("properties")) {
+                    // Unit struct - return empty dict
+                    return dict;
+                }
+
+                // Handle regular structs
                 if (schema["properties"] is JObject props) {
                     foreach (var p in props.Properties()) {
                         var propSchema = ResolveRef(p.Value["type"]);
                         if (propSchema != null) {
                             dict[p.Name] = CreateDefault(propSchema);
-
                         }
                     }
                 }
