@@ -45,33 +45,56 @@ public class CustomExtrasContext : GLTFExportPluginContext
     public override void AfterNodeExport(GLTFSceneExporter exporter, GLTFRoot gltfRoot, Transform unityTransform, Node gltfNode) {
         if (unityTransform == null || gltfNode == null) return;
 
-        // --- 1. Check for the specific component ---
-        // GetComponentInChildren also checks the component on the current GameObject itself.
-        NewBevityComponents bevityComponents = unityTransform.GetComponentInChildren<NewBevityComponents>(true); // Include inactive components if needed
-
-        // If the component is not found on this GameObject or its children, do nothing for this node.
+        // YOUR EXISTING BEVITY COMPONENT LOGIC
+        BevityComponents bevityComponents = unityTransform.GetComponent<BevityComponents>();
         if (bevityComponents == null) {
-            // Optional: Log if you want to know which nodes are skipped
-            // Debug.Log($"CustomExtrasPlugin: Skipping node '{unityTransform.name}' (ID: {nodeId.Id}) - Component 'MyCustomDataComponent' not found in children.");
-            return;
+            Debug.Log($"CustomExtrasPlugin: Adding BevityComponents to '{unityTransform.name}' during export");
+            bevityComponents = unityTransform.gameObject.AddComponent<BevityComponents>();
         }
 
-        // --- 2. Prepare your custom JSON data ---
-        // You can now access data from the found 'dataComponent' if needed.
         var customData = bevityComponents.ToBevyJson();
-
-        // --- 3. Add the custom data to the glTF node's extras ---
-
-        // Check if the Extras object already exists on the node. If not, create it.
         if (gltfNode.Extras == null) {
             gltfNode.Extras = new JObject();
         }
-
-        // Add your custom JObject to the node's Extras under the specified key.
-        // This will overwrite if the key already exists on this node's extras.
         gltfNode.Extras[ExtrasDataKey] = customData;
 
-        //Debug.Log($"CustomExtrasPlugin: Added data under key '{ExtrasDataKey}'. Node extras: {gltfNode.Extras.ToString(Newtonsoft.Json.Formatting.None)}"); // Use None formatting for brevity in logs
+        // NEW: FIX UNITY'S BAKED SCALING
+        //FixUnityBakedTransforms(unityTransform, gltfNode);
+    }
+
+    private void FixUnityBakedTransforms(Transform unityTransform, Node gltfNode) {
+        // Only fix child objects (root objects don't have baked scaling)
+        if (unityTransform.parent == null) return;
+
+        // Calculate the accumulated scale from all parents
+        Vector3 accumulatedParentScale = CalculateAccumulatedParentScale(unityTransform);
+
+        // If there's no scaling in the hierarchy, nothing to fix
+        if (accumulatedParentScale == Vector3.one) return;
+
+        // Unity has already baked the parent scaling into this transform's position
+        // We need to "unbake" it so Bevy can apply the scaling correctly
+        Vector3 unbakedPosition = Vector3.Scale(unityTransform.localPosition,
+            new Vector3(1f / accumulatedParentScale.x, 1f / accumulatedParentScale.y, 1f / accumulatedParentScale.z));
+
+        // Convert Unity Vector3 to GLTF Vector3
+        gltfNode.Translation = new GLTF.Math.Vector3(unbakedPosition.x, unbakedPosition.y, unbakedPosition.z);
+
+        Debug.Log($"Fixed baked scaling for '{unityTransform.name}': " +
+                  $"{unityTransform.localPosition} -> {unbakedPosition} " +
+                  $"(parent scale: {accumulatedParentScale})");
+    }
+
+    private Vector3 CalculateAccumulatedParentScale(Transform child) {
+        Vector3 accumulated = Vector3.one;
+        Transform current = child.parent;
+
+        while (current != null) {
+            accumulated = Vector3.Scale(accumulated, current.localScale);
+            current = current.parent;
+        }
+
+        return accumulated;
     }
 
     // Optional: If you still need to add data to the ROOT extras as well,
