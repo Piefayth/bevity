@@ -288,10 +288,19 @@ public class BevityComponents : MonoBehaviour
 
         switch (kind) {
             case "Struct":
-                // Check if this is a unit struct (no properties field) vs regular struct (empty properties)
+                // Check if this is a unit struct (no properties field)
                 if (!schema.ContainsKey("properties")) {
-                    // Unit struct - serialize as null for Rust's unit struct deserialization
-                    return JValue.CreateNull();
+                    // Unit struct - check if it has Serialize/Deserialize traits
+                    var reflectTypes = schema["reflectTypes"] as JArray;
+                    bool hasSerdeTraits = reflectTypes?.Any(t => t.ToString() == "Serialize" || t.ToString() == "Deserialize") == true;
+
+                    if (hasSerdeTraits) {
+                        // Has Serde traits - serialize as null
+                        return JValue.CreateNull();
+                    } else {
+                        // No Serde traits - use Bevy reflection format (empty object)
+                        return new JObject();
+                    }
                 }
 
                 var jo = new JObject();
@@ -788,7 +797,8 @@ public class BevityComponents : MonoBehaviour
 
                 // Check if this is a unit struct (no properties field)
                 if (!schema.ContainsKey("properties")) {
-                    // Unit struct - return empty dict
+                    // Unit struct - always return empty dict (the internal representation)
+                    // The serialization format (null vs {}) will be handled in SerializeValue
                     return dict;
                 }
 
